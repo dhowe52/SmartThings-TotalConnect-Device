@@ -36,7 +36,6 @@ preferences {
 metadata {
 	definition (name: "TotalConnect Device", namespace: "bdwilson", author: "Brian Wilson") {
 	capability "Lock"
-	capability "Polling"
 	capability "Refresh"
 	capability "Switch"
 	attribute "status", "string"
@@ -47,34 +46,32 @@ simulator {
 }
 
 tiles {
-	// there is probably a better way to do this.
-	standardTile("statusstay", "device.status") {
-		state("Disarmed", label:'Disarmed', action:"switch.on",	 icon:"st.Home.home4",	  backgroundColor:"#79b821", nextState: "Armed Stay")
-		state("Armed Stay", label:'Armed Stay', action:"switch.off",	icon:"st.Home.home4",  backgroundColor:"#f8fc02", nextState: "Disarmed")
-	}
-	standardTile("statusaway", "device.status") {
-		state("Disarmed", label:'Disarmed', action:"lock.lock",	 icon:"st.Home.home3",	  backgroundColor:"#79b821", nextState: "Armed Away")
-		state("Armed Away", label:'Armed Away', action:"lock.unlock",	 icon:"st.Home.home3",	backgroundColor:"#f00000", nextState: "Disarmed")
-	}
-	standardTile("refresh", "device.refresh", inactiveLabel: false, decoration: "flat") {
-		state("default", label:'', action:"refresh.refresh", icon:"st.secondary.refresh")
-	}
-	standardTile("status", "device.status", canChangeIcon: true, canChangeBackground: true) {
-		state("Disarmed", label:'Disarmed', action: "refresh.refresh", backgroundColor:"#79b821")
-		state("Armed Away", label:'Armed Away', action: "refresh.refresh", backgroundColor:"#f00000")
-		state("Armed Stay", label:'Armed Stay', action: "refresh.refresh", backgroundColor:"#f8fc02")
-	}
-	main "status"
-	details(["statusstay", "statusaway", "refresh"])
-	// Maybe someone will add Arm Away/Arm Stay/Disarm tiles for this??	 And the home tile would show if it's armed/disarmed??
-	  
+		standardTile("toggle", "device.status", width: 2, height: 2) {
+			state("unknown", label:'${name}', action:"device.refresh", icon:"st.Office.office9", backgroundColor:"#ffa81e")
+			state("Armed Stay", label:'${name}', action:"switch.off", icon:"st.Home.home4", backgroundColor:"#79b821", nextState:"Disarmed")
+			state("Disarmed", label:'${name}', action:"lock.lock", icon:"st.Home.home2", backgroundColor:"#a8a8a8", nextState:"Armed Away")
+			state("Armed Away", label:'${name}', action:"switch.off", icon:"st.Home.home3", backgroundColor:"#79b821", nextState:"Disarmed")
+            state("Arming", label:'${name}', icon:"st.Home.home4", backgroundColor:"#ffa81e")
+			state("Disarming", label:'${name}', icon:"st.Home.home2", backgroundColor:"#ffa81e")
+		}
+		standardTile("statusstay", "device.status", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'Arm Stay', action:"switch.on", icon:"st.Home.home4"
+		}
+		standardTile("statusaway", "device.status", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'Arm Away', action:"lock.lock", icon:"st.Home.home3"
+		}
+		standardTile("statusdisarm", "device.status", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'Disarm', action:"switch.off", icon:"st.Home.home2"
+		}
+		standardTile("refresh", "device.status", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'', action:"refresh.refresh", icon:"st.secondary.refresh"
+		}
+
+		main "toggle"
+		details(["toggle", "statusaway", "statusstay", "statusdisarm", "refresh"])
 	}
 }
 
-def poll() {
-	refresh()
-}
-	
 // Login Function. Returns SessionID for rest of the functions
 def login(token) {
 	log.debug "Executed login"
@@ -134,11 +131,16 @@ def armAway() {
 	]
 	httpPost(paramsArm) // Arming Function in away mode
 	def metaData = panelMetaData(token, locationId) // Get AlarmCode
-	while( metaData.alarmCode != 10201 ){ 
-		pause(3000) // 3 Seconds Pause to relieve number of retried on while loop
-		metaData = panelMetaData(token, locationId)
-	}  
-	sendPush("Armed Away is now active.")	  
+	if (metaData.alarmCode == 10201) {
+		log.debug "Status is: Already Armed Away"
+		sendEvent(name: "status", value: "Armed Away", displayed: "true", description: "Refresh: Alarm is Armed Away") 
+	} else if (metaData.alarmCode == 10203) {
+		log.debug "Status is: Armed Stay - Please Disarm First"
+		sendEvent(name: "status", value: "Armed Stay", displayed: "true", description: "Refresh: Alarm is Armed Stay") 
+    } else {
+		log.debug "Status is: Arming"
+        httpPost(paramsArm) // Arming Function in away mode
+    }
 	logout(token)
 }
 
@@ -152,12 +154,17 @@ def armStay() {
 	]
 	httpPost(paramsArm) // Arming function in stay mode
 	def metaData = panelMetaData(token, locationId) // Gets AlarmCode
-	while( metaData.alarmCode != 10203 ){ 
-		pause(3000) // 3 Seconds Pause to relieve number of retried on while loop
-		metaData = panelMetaData(token, locationId)
-	} 
-	sendPush("Armed Stay is now active.")
-	logout(token)
+	if (metaData.alarmCode == 10203) {
+		log.debug "Status is: Already Armed Stay"
+		sendEvent(name: "status", value: "Armed Stay", displayed: "true", description: "Refresh: Alarm is Armed Stay") 
+	} else if (metaData.alarmCode == 10201) {
+		log.debug "Status is: Armed Away - Please Disarm First"
+		sendEvent(name: "status", value: "Armed Away", displayed: "true", description: "Refresh: Alarm is Armed Away") 
+  	} else {
+		log.debug "Status is: Arming"
+        httpPost(paramsArm) // Arming function in stay mode
+    }
+    logout(token)
 }
 
 def disarm() {
@@ -170,12 +177,13 @@ def disarm() {
 	]
 	httpPost(paramsDisarm)	
 	def metaData = panelMetaData(token, locationId) // Gets AlarmCode
-	while( metaData.alarmCode != 10200 ){ 
-		pause(3000) // 3 Seconds Pause to relieve number of retried on while loop
-		metaData = panelMetaData(token, locationId)
-	}
-	// log.debug "Home is now Disarmed successfully"   
-	sendPush("Home is now Disarmed successfully")
+	if (metaData.alarmCode == 10200) {
+		log.debug "Status is: Already Disarmed"
+		sendEvent(name: "status", value: "Disarmed", displayed: "true", description: "Refresh: Alarm is Disarmed") 
+	} else {
+		log.debug "Status is: Disarming"
+		httpPost(paramsDisarm)	
+	} 
 	logout(token)
 }
 
@@ -211,26 +219,30 @@ def lock() {
 	log.debug "Executing 'Arm Away'"
 	armAway()
 	sendEvent(name: "lock", value: "lock", displayed: "true", description: "Arming Away") 
-	sendEvent(name: "status", value: "Aramed Away", displayed: "true", description: "Updating Status: Armed Away")
+	sendEvent(name: "status", value: "Arming", displayed: "true", description: "Updating Status: Arming System")
+	runIn(15,refresh)
 }
 
 def unlock() {
 	log.debug "Executing 'Disarm'"
 	disarm()
 	sendEvent(name: "unlock", value: "unlock", displayed: "true", description: "Disarming") 
-	sendEvent(name: "status", value: "Disarmed", displayed: "true", description: "Updating Status: Disarmed") 
+	sendEvent(name: "status", value: "Disarming", displayed: "true", description: "Updating Status: Disarming System") 
+	runIn(15,refresh)
 }
 
 def on() {
 	log.debug "Executing 'Arm Stay'"
 	armStay()
 	sendEvent(name: "switch", value: "on", displayed: "true", description: "Arming Stay") 
-	sendEvent(name: "status", value: "Armed Stay", displayed: "true", description: "Updating Status: Alarm is Armed Stay") 
+	sendEvent(name: "status", value: "Arming", displayed: "true", description: "Updating Status: Arming System") 
+	runIn(15,refresh)
 }
 
 def off() {
 	log.debug "Executing 'Disarm'"
 	disarm()
 	sendEvent(name: "switch", value: "off", displayed: "true", description: "Disarming") 
-	sendEvent(name: "status", value: "Disarmed", displayed: "true", description: "Updating Status: Disarmed") 
+	sendEvent(name: "status", value: "Disarmed", displayed: "true", description: "Updating Status: Disarming System") 
+	runIn(15,refresh)
 }
